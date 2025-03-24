@@ -1,0 +1,97 @@
+- hosts: all
+  tasks:
+    # - hostname:
+    #     name: "{{ inventory_hostname }}"
+    #   become: yes
+
+    - name: "gather ip addresses assigned to host"
+      command: hostname --ip-address
+      register: ip_address
+      changed_when: false
+    
+    - name: "check IP addresses configured for host"
+      set_fact:
+        local_only: "'127.0.0.1' in ip_address.stdout or '::1' in ip_address.stdout"
+      changed_when: local_only
+    
+    - when: local_only
+      name: "warn if hostname is mapped only to localhost addresses"
+      changed_when: true
+      debug:
+        msg: |
+            ******************************************************************************
+            * WARNING: Only localhost addresses found                                    *
+            * Should return at least one non-loopback IP address here                    *
+            * @see https://pve.proxmox.com/wiki/Install_Proxmox_VE_on_Debian_12_Bookworm *
+            ******************************************************************************
+            Got: {{ ip_address.stdout }}
+
+    - when: local_only
+      pause:  
+    
+
+    - name: "add Proxmox VE repository"
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/pve-install-repo.list
+        content: "deb [arch=amd64] http://download.proxmox.com/debian/pve bookworm pve-no-subscription"
+      become: yes
+
+    - name: "download Proxmox VE GPG key"
+      ansible.builtin.get_url:
+        url: https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg
+        dest: /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg
+      become: yes
+
+    - name: "verify Proxmox VE GPG key"
+      ansible.builtin.shell: |
+        echo "7da6fe34168adc6e479327ba517796d4702fa2f8b4f0a9833f5ea6e6b48f6507a6da403a274fe201595edc86a84463d50383d07f64bdde2e3658108db7d6dc87 /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg" | sha512sum -c -
+      register: gpg_key_check
+      changed_when: false
+      failed_when: gpg_key_check.rc != 0
+
+    - name: "update apt cache"
+      ansible.builtin.apt:
+        update_cache: yes
+      become: yes
+
+    - name: "upgrade all packages"
+      ansible.builtin.apt:
+        upgrade: full
+      become: yes
+    
+    - name: "install proxmox-default-kernel"
+      ansible.builtin.apt:
+        name: proxmox-default-kernel
+        state: present
+      become: yes
+    
+    # reboot server
+    - name: "wait for host to become available after rebooting in the new kernel"
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+      become: yes
+    
+    - pause:
+
+    - name: "install Proxmox VE packages"
+      ansible.builtin.apt:
+        name:
+          - proxmox-ve
+          - postfix
+          - open-iscsi
+          - chrony
+        state: present
+      become: yes
+    
+    - name: "remove old (default) kernel images"
+      ansible.builtin.apt:
+        name:
+          - linux-image-amd64
+          - 'linux-image-6.1*'
+          - os-prober
+        state: absent
+      become: yes
+    
+    - name: "update grub"
+      ansible.builtin.command: update-grub
+      become: yes
