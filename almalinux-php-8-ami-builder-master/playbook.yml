@@ -1,0 +1,28 @@
+- hosts: all
+  become: true
+  tasks:
+    - name: ensure packages are up to date
+      ansible.builtin.package: name=* state=latest
+
+    - name: ensure EPEL repository is installed
+      ansible.builtin.package: name=epel-release state=present
+
+    - name: ensure REMI RPM signing key is imported
+      ansible.builtin.rpm_key:
+        key: https://rpms.remirepo.net/RPM-GPG-KEY-remi2018
+        fingerprint: 6B38 FEA7 231F 87F5 2B9C  A9D8 5550 9759 5F11 735A
+        state: present
+
+    - name: ensure REMI repository is installed
+      ansible.builtin.package:
+        name: https://rpms.remirepo.net/enterprise/remi-release-8.rpm
+        state: present
+
+    - name: ensure REMI PHP8 module packages are installed
+      ansible.builtin.command: dnf module install php:remi-8.0 -y
+      register: installation
+      changed_when: "'Nothing to do.' not in installation.stdout"
+
+    - when: cloud_provisioning is defined
+      name: ensure no pre-existing SSH keys are present
+      ansible.builtin.shell: shred -u /etc/ssh/*_key /etc/ssh/*_key.pub
