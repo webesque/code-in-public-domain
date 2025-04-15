@@ -1,0 +1,107 @@
+#!/usr/bin/env php
+<?php
+
+require_once __DIR__ . '/src/bootstrap.php';
+global $http_client;
+
+$chat_client = $http_client->withOptions([
+    'base_uri' => "http://127.0.0.1:8080/",
+]);
+
+array_shift($argv);
+
+$chat = [
+    'model' => 'BitAgent-8',
+    'tools' => [
+        require __DIR__ . '/src/tools/get_random_cat_fact.schema.php',
+        require __DIR__ . '/src/tools/is_millennial.schema.php',
+        require __DIR__ . '/src/tools/predict_age_by_name.schema.php',
+    ],
+    'messages' => [
+        ['role' => 'user', 'content' => implode(" ", $argv)]
+    ]
+];
+
+require_once __DIR__ . '/src/tools/get_random_cat_fact.php';
+require_once __DIR__ . '/src/tools/is_millennial.php';
+require_once __DIR__ . '/src/tools/predict_age_by_name.php';
+
+call:
+$response_data = call_model($chat);
+
+if (has_tool_call($response_data)) {
+    $tool_calls = $response_data['choices'][0]['message']['tool_calls'];
+    $called_functions = 0;
+    if (count($tool_calls) > 0) {
+        $chat['messages'][] = [
+            'role' => 'assistant',
+            'content' => null,
+            'tool_calls' => $tool_calls
+        ];
+    }
+
+    foreach ($tool_calls as $tool_call) {
+        $fn_name = $tool_call['function']['name'];
+        if (function_exists($fn_name)) {
+            $arguments = $tool_call['function']['arguments'];
+            $args = json_decode($arguments, true);
+            echo "Calling $fn_name with $arguments\n";
+
+            $result = $fn_name($args);
+            echo "Result $result\n";
+            $chat['messages'][] = [
+                'role' => 'tool',
+                'content' => $result,
+                'tool_call_id' => $tool_call['id']
+            ];
+            $called_functions += 1;
+        }
+    }
+
+    if ($called_functions > 0) {
+        echo "Passing back data into model\n";
+        goto call;
+    }
+}
+
+echo $response_data['choices'][0]['message']['content'] . "\n";
+
+/**
+ * @param array{
+ *     choices: array<array{
+ *         finish_reason: string,
+ *         index: int,
+ *         message: array{
+ *             role: string,
+ *             content: ?string,
+ *             tool_calls: array<array{
+ *                 type: "function",
+ *                 function: array{
+ *                     name: string,
+ *                     arguments: string
+ *                 },
+ *                 id: string
+ *             }>
+ *         }
+ *     }, ...>
+ * } $response_data
+ * @return bool
+ */
+function has_tool_call(array $response_data): bool
+{
+    if ('tool_calls' === ($response_data['choices'][0]['finish_reason'] ?? 'not a tool call')) {
+        return true;
+    }
+
+    return false;
+}
+
+
+function call_model(array $chat)
+{
+    global $chat_client;
+    return $chat_client->request('POST', '/v1/chat/completions', [
+        'timeout' => 30.0,
+        'json' => $chat
+    ])->toArray();
+}
